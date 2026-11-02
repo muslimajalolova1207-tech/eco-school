@@ -61,8 +61,9 @@ export default function LoginPage() {
         return;
       }
 
-      setMessage("Sinflar muvaffaqiyatli yuklandi.");
-    } catch {
+      setMessage(`${data.length} ta sinf muvaffaqiyatli yuklandi.`);
+    } catch (err) {
+      console.error("Class loading error:", err);
       setError("Sinflarni yuklashda kutilmagan xatolik yuz berdi.");
     } finally {
       setLoading(false);
@@ -262,4 +263,77 @@ export default function LoginPage() {
                   className="w-full rounded-2xl border border-[#e1e4da] bg-[#f1f2ed] px-5 py-4 outline-none transition focus:border-[#28583b] disabled:cursor-not-allowed disabled:opacity-70"
                 >
                   <option value="">
-                    {classes.length
+                    {classes.length > 0
+                      ? "Sinfingizni tanlang"
+                      : "Avval maktab kodini kiriting"}
+                  </option>
+
+                  {classes.map((item) => (
+                    <option key={item.class_name} value={item.class_name}>
+                      {item.class_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </>
+          )}
+
+          <div>
+            <label className="mb-2 block text-sm font-medium text-gray-800">
+              Email manzil
+            </label>
+
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="example@email.com"
+              required
+              className="w-full rounded-2xl border border-[#e1e4da] px-5 py-4 outline-none transition focus:border-[#28583b]"
+            />
+          </div>
+
+          <div>
+            <label className="mb-2 block text-sm font-medium text-gray-800">
+              Parol
+            </label>
+
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Kamida 8 ta belgi"
+              minLength={8}
+              required
+              className="w-full rounded-2xl border border-[#e1e4da] px-5 py-4 outline-none transition focus:border-[#28583b]"
+            />
+          </div>
+
+          {error && (
+            <div className="rounded-2xl bg-red-50 p-4 text-sm text-red-600">
+              {error}
+            </div>
+          )}
+
+          {message && (
+            <div className="rounded-2xl bg-green-50 p-4 text-sm text-[#28583b]">
+              {message}
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full rounded-2xl bg-[#28583b] px-5 py-4 font-semibold text-white transition hover:bg-[#214a31] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {loading
+              ? "Kuting..."
+              : mode === "register"
+                ? "Ro‘yxatdan o‘tish"
+                : "Kirish"}
+          </button>
+        </form>
+      </div>
+    </main>
+  );
+}

@@ -2,6 +2,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { FormEvent } from "react";
 import { createClient } from "@/lib/supabase";
 
 type RecyclingSubmission = {
@@ -10,6 +11,7 @@ type RecyclingSubmission = {
   amount_kg: number;
   status: "pending" | "approved" | "rejected";
   awarded_points: number;
+  proof_image: string | null;
   submitted_at: string;
 };
 
@@ -17,19 +19,34 @@ export default function RecyclingPage() {
   const [supabase] = useState(() => createClient());
   const [material, setMaterial] = useState<"paper" | "plastic">("paper");
   const [amount, setAmount] = useState("");
+  const [proofFile, setProofFile] = useState<File | null>(null);
   const [submissions, setSubmissions] = useState<RecyclingSubmission[]>([]);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [message, setMessage] = useState("");
+  const [messageIsError, setMessageIsError] = useState(false);
 
   async function loadSubmissions() {
+    const { data: authData, error: authError } =
+      await supabase.auth.getUser();
+
+    if (authError || !authData.user) {
+      setSubmissions([]);
+      setLoading(false);
+      return;
+    }
+
     const { data, error } = await supabase
       .from("recycling_submissions")
-      .select("id, material, amount_kg, status, awarded_points, submitted_at")
+      .select(
+        "id, material, amount_kg, status, awarded_points, proof_image, submitted_at"
+      )
+      .eq("student_id", authData.user.id)
       .order("submitted_at", { ascending: false });
 
     if (error) {
       setMessage("Ma'lumotlarni yuklashda xatolik: " + error.message);
+      setMessageIsError(true);
     } else {
       setSubmissions(data || []);
     }
@@ -39,60 +56,125 @@ export default function RecyclingPage() {
 
   useEffect(() => {
     loadSubmissions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function submitRecycling(e: React.FormEvent<HTMLFormElement>) {
+  async function submitRecycling(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setMessage("");
+    setMessageIsError(false);
 
     const kg = Number(amount);
 
     if (!Number.isFinite(kg) || kg <= 0) {
       setMessage("Iltimos, to‘g‘ri vazn kiriting.");
+      setMessageIsError(true);
+      return;
+    }
+
+    if (!proofFile) {
+      setMessage("Iltimos, tarozi rasmini yuklang.");
+      setMessageIsError(true);
+      return;
+    }
+
+    if (!["image/jpeg", "image/png", "image/webp"].includes(proofFile.type)) {
+      setMessage("Faqat JPG, PNG yoki WEBP formatidagi rasm yuklang.");
+      setMessageIsError(true);
+      return;
+    }
+
+    if (proofFile.size > 5 * 1024 * 1024) {
+      setMessage("Rasm hajmi 5 MB dan oshmasligi kerak.");
+      setMessageIsError(true);
       return;
     }
 
     setSending(true);
 
-    const { data: authData, error: authError } =
-      await supabase.auth.getUser();
+    try {
+      const { data: authData, error: authError } =
+        await supabase.auth.getUser();
 
-    if (authError || !authData.user) {
-      setMessage("Davom etish uchun tizimga kiring.");
-      setSending(false);
-      return;
-    }
+      if (authError || !authData.user) {
+        setMessage("Davom etish uchun tizimga kiring.");
+        setMessageIsError(true);
+        return;
+      }
 
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("school_id")
-      .eq("id", authData.user.id)
-      .single();
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("school_id")
+        .eq("id", authData.user.id)
+        .single();
 
-    if (profileError || !profile?.school_id) {
-      setMessage("Profilingizga maktab biriktirilmagan.");
-      setSending(false);
-      return;
-    }
+      if (profileError || !profile?.school_id) {
+        setMessage("Profilingizga maktab biriktirilmagan.");
+        setMessageIsError(true);
+        return;
+      }
 
-    const { error } = await supabase
-      .from("recycling_submissions")
-      .insert({
-        school_id: profile.school_id,
-        student_id: authData.user.id,
-        material,
-        amount_kg: kg,
-      });
+      const fileExtension =
+        proofFile.name.split(".").pop()?.toLowerCase() || "jpg";
 
-    if (error) {
-      setMessage("Yuborishda xatolik: " + error.message);
-    } else {
-      setMessage("Topshirig‘ingiz yuborildi! Eco Team tasdiqlashini kuting.");
+      const filePath = `${authData.user.id}/${Date.now()}-${crypto.randomUUID()}.${fileExtension}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("recycling_proof")
+        .upload(filePath, proofFile, {
+          cacheControl: "3600",
+          upsert: false,
+          contentType: proofFile.type,
+        });
+
+      if (uploadError) {
+        setMessage("Rasmni yuklashda xatolik: " + uploadError.message);
+        setMessageIsError(true);
+        return;
+      }
+
+      const { error: insertError } = await supabase
+        .from("recycling_submissions")
+        .insert({
+          school_id: profile.school_id,
+          student_id: authData.user.id,
+          material,
+          amount_kg: kg,
+          proof_image: filePath,
+        });
+
+      if (insertError) {
+        await supabase.storage
+          .from("recycling_proof")
+          .remove([filePath]);
+
+        setMessage("Yuborishda xatolik: " + insertError.message);
+        setMessageIsError(true);
+        return;
+      }
+
+      setMessage(
+        "Topshirig‘ingiz yuborildi! Eco Team tasdiqlashini kuting."
+      );
+      setMessageIsError(false);
       setAmount("");
-      await loadSubmissions();
-    }
+      setProofFile(null);
 
-    setSending(false);
+      const fileInput = document.getElementById(
+        "proof-image"
+      ) as HTMLInputElement | null;
+
+      if (fileInput) {
+        fileInput.value = "";
+      }
+
+      await loadSubmissions();
+    } catch {
+      setMessage("Kutilmagan xatolik yuz berdi. Qayta urinib ko‘ring.");
+      setMessageIsError(true);
+    } finally {
+      setSending(false);
+    }
   }
 
   const statusText = {
@@ -112,10 +194,14 @@ export default function RecyclingPage() {
           <p className="text-sm font-semibold uppercase tracking-widest text-green-700">
             ECO SCHOOL · RECYCLING
           </p>
-          <h1 className="mt-3 text-4xl font-bold">Chiqindini resursga aylantiring.</h1>
+
+          <h1 className="mt-3 text-4xl font-bold">
+            Chiqindini resursga aylantiring.
+          </h1>
+
           <p className="mt-3 text-[#66746a]">
-            Qog‘oz va plastikni qayta ishlashga topshiring, natijangizni maktab
-            ekologik ta’siriga qo‘shing.
+            Qog‘oz va plastikni qayta ishlashga topshiring, natijangizni
+            maktab ekologik ta’siriga qo‘shing.
           </p>
         </header>
 
@@ -139,7 +225,7 @@ export default function RecyclingPage() {
             >
               <span className="text-3xl">📄</span>
               <span className="mt-2 block font-semibold">Qog‘oz</span>
-              <span className="text-sm text-gray-500">1 kg = 10 ball</span>
+              <span className="text-sm text-gray-500">1 kg = 25 ball</span>
             </button>
 
             <button
@@ -153,12 +239,12 @@ export default function RecyclingPage() {
             >
               <span className="text-3xl">♻️</span>
               <span className="mt-2 block font-semibold">Plastik</span>
-              <span className="text-sm text-gray-500">1 kg = 15 ball</span>
+              <span className="text-sm text-gray-500">1 kg = 25 ball</span>
             </button>
           </div>
 
           <label className="mb-2 mt-6 block text-sm font-medium">
-            Taxminiy vazn (kg)
+            Vazn (kg)
           </label>
 
           <input
@@ -172,8 +258,41 @@ export default function RecyclingPage() {
             required
           />
 
-          <p className="mt-2 text-xs text-gray-500">
-            Yakuniy vaznni Eco Team a’zosi tekshiradi.
+          <label
+            htmlFor="proof-image"
+            className="mb-2 mt-6 block text-sm font-medium"
+          >
+            Tarozi rasmi
+          </label>
+
+          <div className="rounded-2xl border-2 border-dashed border-green-200 bg-green-50/50 p-5">
+            <input
+              id="proof-image"
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              capture="environment"
+              onChange={(e) =>
+                setProofFile(e.target.files?.[0] || null)
+              }
+              className="w-full text-sm"
+              required
+            />
+
+            <p className="mt-3 text-xs text-gray-600">
+              Rasmda chiqindi va tarozidagi kilogramm ko‘rsatkichi aniq
+              ko‘rinishi kerak. Maksimal hajm: 5 MB.
+            </p>
+
+            {proofFile && (
+              <p className="mt-2 text-sm font-medium text-green-800">
+                Tanlangan rasm: {proofFile.name}
+              </p>
+            )}
+          </div>
+
+          <p className="mt-3 text-xs text-gray-500">
+            Eco Team rasmni tekshiradi va tasdiqlangan vazn asosida ball
+            hisoblanadi.
           </p>
 
           <button
@@ -185,7 +304,14 @@ export default function RecyclingPage() {
           </button>
 
           {message && (
-            <p className="mt-4 rounded-xl bg-green-50 p-3 text-sm text-green-900">
+            <p
+              role="status"
+              className={`mt-4 rounded-xl p-3 text-sm ${
+                messageIsError
+                  ? "bg-red-50 text-red-800"
+                  : "bg-green-50 text-green-900"
+              }`}
+            >
               {message}
             </p>
           )}
@@ -211,9 +337,11 @@ export default function RecyclingPage() {
                     <p className="font-semibold">
                       {item.material === "paper" ? "📄 Qog‘oz" : "♻️ Plastik"}
                     </p>
+
                     <p className="mt-1 text-sm text-gray-500">
                       {item.amount_kg} kg
                     </p>
+
                     <p className="mt-1 text-xs text-gray-400">
                       {new Date(item.submitted_at).toLocaleDateString("uz-UZ")}
                     </p>
@@ -223,6 +351,7 @@ export default function RecyclingPage() {
                     <p className="text-sm font-medium">
                       {statusText[item.status]}
                     </p>
+
                     {item.status === "approved" && (
                       <p className="mt-1 font-bold text-green-700">
                         +{item.awarded_points} ball

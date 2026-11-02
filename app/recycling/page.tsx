@@ -120,7 +120,7 @@ export default function RecyclingPage() {
       const filePath = `${authData.user.id}/${Date.now()}-${crypto.randomUUID()}.${fileExtension}`;
 
       const { error: uploadError } = await supabase.storage
-        .from("recycling_proof")
+        .from("recycling-proofs")
         .upload(filePath, proofFile, {
           cacheControl: "3600",
           upsert: false,
@@ -145,7 +145,7 @@ export default function RecyclingPage() {
 
       if (insertError) {
         await supabase.storage
-          .from("recycling_proof")
+          .from("recycling-proofs")
           .remove([filePath]);
 
         setMessage("Yuborishda xatolik: " + insertError.message);
